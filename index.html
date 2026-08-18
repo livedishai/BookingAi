@@ -47,7 +47,7 @@
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzaNy4wDQ-Ek0oy6hLLLdQmNP4EI6oLIpdTakJ9Y6Rm8-nfnTSnFJkLBSO6SecXNyubBQ/exec";
 
     const SYSTEM_PROMPT = `
-You are "Aarav", a polite, enthusiastic AI voice receptionist for "Spice Garden Restaurant" in Indiranagar, Bengaluru.
+You are "Aarav", a polite and professional AI voice receptionist for "Spice Garden Restaurant" in Indiranagar, Bengaluru.
 - Timings: 12:00 PM to 11:30 PM daily.
 - Signature Dishes: Chettinad Chicken Biryani (₹380), Paneer Butter Masala (₹320), Japanese Ramen (₹420), Chocolate Lava Cake (₹220).
 - Facilities: Free Valet Parking, Halal meat, Pure-Veg section, Jain options available.
@@ -91,7 +91,7 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
 
       recognition.onerror = (e) => {
         console.error("Speech Error:", e);
-        document.getElementById('status-text').innerText = "Listening stopped. Speak again...";
+        document.getElementById('status-text').innerText = "Listening paused. Tap to speak again.";
         document.getElementById('mic-pulse').classList.remove('animate-pulse');
       };
     } else {
@@ -113,66 +113,49 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
       }
     }
 
-    // 3. GEMINI API CALL WITH HEADER-BASED AUTH & FALLBACK
+    // 3. GEMINI API CALL WITH DIRECT KEY QUERY PARAMETER
     async function processWithGemini(userMessage) {
       conversationHistory.push({ role: "user", parts: [{ text: userMessage }] });
 
       try {
-        const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent", {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        
+        const response = await fetch(endpoint, {
           method: "POST",
-          headers: { 
-            "Content-Type": "application/json",
-            "x-goog-api-key": GEMINI_API_KEY
+          headers: {
+            "Content-Type": "application/json"
           },
           body: JSON.stringify({ contents: conversationHistory })
         });
 
-        if (!response.ok) {
-          console.warn("Primary 2.0-flash failed, attempting 1.5-flash fallback...");
-          return await fallbackTo15Flash();
+        const data = await response.json();
+        
+        if (!response.ok || data.error) {
+          console.error("Gemini API Error:", data.error);
+          alert("Gemini Error: " + (data.error ? data.error.message : "HTTP " + response.status));
+          displayAndSpeak("I encountered an issue connecting to the system.");
+          return;
         }
 
-        const data = await response.json();
-        handleGeminiResponse(data);
+        let aiRawReply = data.candidates[0].content.parts[0].text;
+
+        // Check for completed table reservation
+        if (aiRawReply.includes("BOOKING_DATA:")) {
+          const parts = aiRawReply.split("BOOKING_DATA:");
+          const spokenReply = parts[0].trim();
+          const bookingJson = JSON.parse(parts[1].trim());
+
+          displayAndSpeak(spokenReply);
+          saveBookingToGoogleSheet(bookingJson);
+          conversationHistory.push({ role: "model", parts: [{ text: spokenReply }] });
+        } else {
+          displayAndSpeak(aiRawReply);
+          conversationHistory.push({ role: "model", parts: [{ text: aiRawReply }] });
+        }
 
       } catch (err) {
-        console.error("Gemini Connection Error:", err);
-        displayAndSpeak("I'm sorry, I had trouble connecting. Could you please repeat that?");
-      }
-    }
-
-    async function fallbackTo15Flash() {
-      try {
-        const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent", {
-          method: "POST",
-          headers: { 
-            "Content-Type": "application/json",
-            "x-goog-api-key": GEMINI_API_KEY
-          },
-          body: JSON.stringify({ contents: conversationHistory })
-        });
-        const data = await response.json();
-        handleGeminiResponse(data);
-      } catch (err) {
-        console.error("Fallback error:", err);
-        displayAndSpeak("I'm sorry, connection failed. Please try again.");
-      }
-    }
-
-    function handleGeminiResponse(data) {
-      let aiRawReply = data.candidates[0].content.parts[0].text;
-
-      if (aiRawReply.includes("BOOKING_DATA:")) {
-        const parts = aiRawReply.split("BOOKING_DATA:");
-        const spokenReply = parts[0].trim();
-        const bookingJson = JSON.parse(parts[1].trim());
-
-        displayAndSpeak(spokenReply);
-        saveBookingToGoogleSheet(bookingJson);
-        conversationHistory.push({ role: "model", parts: [{ text: spokenReply }] });
-      } else {
-        displayAndSpeak(aiRawReply);
-        conversationHistory.push({ role: "model", parts: [{ text: aiRawReply }] });
+        console.error("Network/Fetch Error:", err);
+        displayAndSpeak("Network connection issue. Please try again.");
       }
     }
 
@@ -193,7 +176,7 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
           try { 
             recognition.start(); 
           } catch (e) {
-            console.warn("Recognition already active or restarting");
+            console.warn("Speech recognition restart skipped:", e);
           }
         }
       };
