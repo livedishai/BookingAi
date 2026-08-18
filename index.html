@@ -43,7 +43,7 @@
     lucide.createIcons();
 
     // 1. CONFIGURATION
-    const GEMINI_API_KEY = "AIzaSyCbnQPV-ZMsmYb5Uy9gid8FvTY3GWmOk0Y";
+    const GEMINI_API_KEY = "AQ.Ab8RN6LyFP56Rzpo9i7ZHO13v8PfJ2SoJHbtdobC-bODhbl1hw";
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzaNy4wDQ-Ek0oy6hLLLdQmNP4EI6oLIpdTakJ9Y6Rm8-nfnTSnFJkLBSO6SecXNyubBQ/exec";
 
     const SYSTEM_PROMPT = `
@@ -51,7 +51,7 @@ You are "Aarav", a polite and professional AI voice receptionist for "Spice Gard
 - Timings: 12:00 PM to 11:30 PM daily.
 - Signature Dishes: Chettinad Chicken Biryani (₹380), Paneer Butter Masala (₹320), Japanese Ramen (₹420), Chocolate Lava Cake (₹220).
 - Facilities: Free Valet Parking, Halal meat, Pure-Veg section, Jain options available.
-- Tone: Keep responses very concise (1 to 2 short sentences max) so it sounds natural when spoken aloud.
+- Tone: Keep responses concise (1 to 2 short sentences max) so it sounds natural when spoken aloud.
 
 RESERVATION COLLECTION FLOW:
 When the user wants to book a table, collect their Name, Date, Time, and Number of Guests.
@@ -67,7 +67,7 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
     let recognition;
     let isCalling = false;
 
-    // 2. SPEECH-TO-TEXT SETUP (Browser Web Speech API)
+    // 2. SPEECH-TO-TEXT SETUP
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       recognition = new SpeechRecognition();
@@ -113,17 +113,18 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
       }
     }
 
-    // 3. GEMINI API CALL WITH KEY PARAMETER
+    // 3. GEMINI API CALL (Using x-goog-api-key Header for AQ Keys)
     async function processWithGemini(userMessage) {
       conversationHistory.push({ role: "user", parts: [{ text: userMessage }] });
 
       try {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`;
         
         const response = await fetch(endpoint, {
           method: "POST",
           headers: {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "x-goog-api-key": GEMINI_API_KEY
           },
           body: JSON.stringify({ contents: conversationHistory })
         });
