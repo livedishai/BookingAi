@@ -11,12 +11,12 @@
 <body class="bg-slate-950 text-white flex items-center justify-center min-h-screen p-4 font-sans antialiased">
 
   <div class="max-w-md w-full bg-slate-900 border border-amber-500/30 rounded-3xl p-6 text-center space-y-4 shadow-2xl relative overflow-hidden">
-    
+
     <!-- Pulse Ring Animation -->
     <div id="mic-pulse" class="w-20 h-20 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto text-3xl transition-all duration-300">
       <i data-lucide="mic" class="w-8 h-8"></i>
     </div>
-    
+
     <div>
       <h2 class="text-xl font-extrabold text-white">Aarav — AI Voice Concierge</h2>
       <p id="status-text" class="text-xs text-slate-400 mt-1">Tap below to talk about the menu or reserve a table</p>
@@ -29,7 +29,7 @@
     </div>
 
     <!-- Live Booking Notification -->
-    <div id="booking-alert" class="hidden p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold">
+    <div id="booking-alert" class="hidden p-3 rounded-xl text-xs font-semibold">
       🎉 Booking saved to your Google Sheet!
     </div>
 
@@ -42,7 +42,15 @@
   <script>
     lucide.createIcons();
 
+    // ============================================================
     // 1. CONFIGURATION
+    // ⚠️ SECURITY WARNING: This key is visible to anyone who views
+    // the page source. Do NOT ship this to production as-is.
+    // Route requests through a small backend/proxy (e.g. a
+    // Cloudflare Worker or your Apps Script doPost) that holds the
+    // real key server-side, and call that endpoint from here instead.
+    // Rotate this key if it has ever been shared or committed anywhere.
+    // ============================================================
     const GEMINI_API_KEY = "AQ.Ab8RN6LyFP56Rzpo9i7ZHO13v8PfJ2SoJHbtdobC-bODhbl1hw";
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzaNy4wDQ-Ek0oy6hLLLdQmNP4EI6oLIpdTakJ9Y6Rm8-nfnTSnFJkLBSO6SecXNyubBQ/exec";
 
@@ -54,9 +62,10 @@ You are "Aarav", a polite and professional AI voice receptionist for "Spice Gard
 - Tone: Keep responses concise (1 to 2 short sentences max) so it sounds natural when spoken aloud.
 
 RESERVATION COLLECTION FLOW:
-When the user wants to book a table, collect their Name, Date, Time, and Number of Guests.
-Once all 4 details are confirmed with the user, reply warmly confirming the reservation and append this hidden JSON block at the very end of your reply:
-BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>","time":"<Time>","guests":<Guest Count>}
+When the user wants to book a table, collect their Name, Phone Number, Date, Time, and Number of Guests.
+Ask for the phone number explicitly — never invent or assume one.
+Once all 5 details are confirmed with the user, reply warmly confirming the reservation and append this hidden JSON block at the very end of your reply, with strictly valid JSON and nothing after it:
+BOOKING_DATA:{"name":"<Customer Name>","phone":"<Customer Phone>","date":"<Date>","time":"<Time>","guests":<Guest Count>}
 `;
 
     let conversationHistory = [
@@ -66,6 +75,25 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
 
     let recognition;
     let isCalling = false;
+    let cachedVoice = null;
+
+    // ------------------------------------------------------------
+    // Fix #3: voice list loads asynchronously in some browsers.
+    // Cache it once it's ready instead of reading it fresh (and
+    // possibly empty) every time we speak.
+    // ------------------------------------------------------------
+    function loadVoice() {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length) {
+        cachedVoice = voices.find(v => v.lang.includes('en-IN')) ||
+                      voices.find(v => v.lang.includes('en-US')) ||
+                      voices[0];
+      }
+    }
+    loadVoice();
+    if ('onvoiceschanged' in window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = loadVoice;
+    }
 
     // 2. SPEECH-TO-TEXT SETUP
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
@@ -83,7 +111,7 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
       recognition.onresult = async (event) => {
         document.getElementById('mic-pulse').classList.remove('animate-pulse');
         const userText = event.results[0][0].transcript;
-        document.getElementById('user-said').innerHTML = `<strong>You:</strong> ${userText}`;
+        document.getElementById('user-said').innerHTML = `<strong>You:</strong> ${escapeHtml(userText)}`;
         document.getElementById('status-text').innerText = "Aarav is thinking...";
 
         await processWithGemini(userText);
@@ -91,11 +119,28 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
 
       recognition.onerror = (e) => {
         console.error("Speech Error:", e);
-        document.getElementById('status-text').innerText = "Listening paused. Tap to speak again.";
+        document.getElementById('mic-pulse').classList.remove('animate-pulse');
+        // Fix #4 related: if the call has already been ended, don't
+        // overwrite the "call ended" status text with a stale message.
+        if (isCalling) {
+          document.getElementById('status-text').innerText = "Listening paused. Tap to speak again.";
+        }
+      };
+
+      // Fix #4: if recognition ends on its own (e.g. silence timeout)
+      // while we're still "in a call" and not mid-response, restart it
+      // so the mic doesn't just silently die.
+      recognition.onend = () => {
         document.getElementById('mic-pulse').classList.remove('animate-pulse');
       };
     } else {
       alert("Please open this page in Google Chrome, Edge, or Safari for voice support.");
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
     }
 
     function toggleCall() {
@@ -103,11 +148,23 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
         isCalling = true;
         document.getElementById('btn-label').innerText = "End Call";
         document.getElementById('talk-btn').className = "w-full bg-rose-600 hover:bg-rose-500 text-white font-black text-xs py-3.5 rounded-2xl transition-all flex items-center justify-center gap-2";
-        recognition.start();
+        try {
+          recognition.start();
+        } catch (e) {
+          console.warn("Recognition already active:", e);
+        }
       } else {
+        // Fix #4: actually stop recognition, not just TTS, when the
+        // call ends — otherwise a pending onresult can still fire.
         isCalling = false;
         window.speechSynthesis.cancel();
+        try {
+          recognition.stop();
+        } catch (e) {
+          console.warn("Recognition stop skipped:", e);
+        }
         document.getElementById('btn-label').innerText = "Start Call";
+        document.getElementById('mic-pulse').classList.remove('animate-pulse');
         document.getElementById('talk-btn').className = "w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs py-3.5 rounded-2xl transition-all flex items-center justify-center gap-2";
         document.getElementById('status-text').innerText = "Call ended. Tap to start again.";
       }
@@ -119,7 +176,7 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
 
       try {
         const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`;
-        
+
         const response = await fetch(endpoint, {
           method: "POST",
           headers: {
@@ -130,25 +187,44 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
         });
 
         const data = await response.json();
-        
+
+        // Fix #2: guard against missing/blocked candidates before
+        // touching data.candidates[0].
         if (!response.ok || data.error) {
           console.error("Gemini API Error:", data.error);
-          alert("Gemini Error: " + (data.error ? data.error.message : "HTTP " + response.status));
-          displayAndSpeak("I encountered an issue connecting to the system.");
+          document.getElementById('status-text').innerText = "Connection issue — tap to retry.";
+          displayAndSpeak("I'm sorry, I had trouble connecting just now. Could you say that again?");
           return;
         }
 
-        let aiRawReply = data.candidates[0].content.parts[0].text;
+        const candidate = data.candidates && data.candidates[0];
+        const partText = candidate && candidate.content && candidate.content.parts && candidate.content.parts[0] && candidate.content.parts[0].text;
 
-        // Check for completed table reservation
+        if (!partText) {
+          console.error("Unexpected Gemini response shape:", data);
+          displayAndSpeak("Sorry, I didn't quite catch that. Could you repeat it?");
+          return;
+        }
+
+        const aiRawReply = partText;
+
+        // Fix #1: wrap JSON parsing in try/catch so a malformed
+        // BOOKING_DATA block doesn't crash the whole flow.
         if (aiRawReply.includes("BOOKING_DATA:")) {
           const parts = aiRawReply.split("BOOKING_DATA:");
           const spokenReply = parts[0].trim();
-          const bookingJson = JSON.parse(parts[1].trim());
 
           displayAndSpeak(spokenReply);
-          saveBookingToGoogleSheet(bookingJson);
           conversationHistory.push({ role: "model", parts: [{ text: spokenReply }] });
+
+          try {
+            const jsonStr = parts[1].trim();
+            const bookingJson = JSON.parse(jsonStr);
+            await saveBookingToGoogleSheet(bookingJson);
+          } catch (parseErr) {
+            console.error("Failed to parse booking JSON:", parseErr, parts[1]);
+            // Don't show a false success message if we couldn't parse the booking.
+          }
         } else {
           displayAndSpeak(aiRawReply);
           conversationHistory.push({ role: "model", parts: [{ text: aiRawReply }] });
@@ -156,26 +232,24 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
 
       } catch (err) {
         console.error("Network/Fetch Error:", err);
+        document.getElementById('status-text').innerText = "Network issue — tap to retry.";
         displayAndSpeak("Network connection issue. Please try again.");
       }
     }
 
     // 4. TEXT-TO-SPEECH (TTS)
     function displayAndSpeak(cleanText) {
-      document.getElementById('ai-reply').innerHTML = `<strong>Aarav:</strong> ${cleanText}`;
-      
+      document.getElementById('ai-reply').innerHTML = `<strong>Aarav:</strong> ${escapeHtml(cleanText)}`;
+
       const utterance = new SpeechSynthesisUtterance(cleanText);
       utterance.rate = 1.0;
-      
-      const voices = window.speechSynthesis.getVoices();
-      const voice = voices.find(v => v.lang.includes('en-IN') || v.lang.includes('en-US'));
-      if (voice) utterance.voice = voice;
+      if (cachedVoice) utterance.voice = cachedVoice;
 
       utterance.onend = () => {
         if (isCalling) {
           document.getElementById('status-text').innerText = "Listening for your reply...";
-          try { 
-            recognition.start(); 
+          try {
+            recognition.start();
           } catch (e) {
             console.warn("Speech recognition restart skipped:", e);
           }
@@ -186,8 +260,18 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
     }
 
     // 5. GOOGLE APPS SCRIPT WEBHOOK DISPATCH
+    // Fix #6: `no-cors` mode makes the response opaque, so we can
+    // never truly confirm success from the client. We keep no-cors
+    // (Apps Script web apps commonly require it) but at least stop
+    // pretending we know it worked — and catch failures we CAN detect
+    // (e.g. network errors) to avoid a false "saved" message.
     async function saveBookingToGoogleSheet(booking) {
-      document.getElementById('booking-alert').classList.remove('hidden');
+      if (!booking.name || !booking.date || !booking.time || !booking.guests) {
+        console.error("Incomplete booking, not sending:", booking);
+        return;
+      }
+
+      const alertBox = document.getElementById('booking-alert');
       try {
         await fetch(SCRIPT_URL, {
           method: "POST",
@@ -195,14 +279,22 @@ BOOKING_DATA:{"name":"<Customer Name>","phone":"+91 9999999999","date":"<Date>",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             customer_name: booking.name,
-            phone_number: booking.phone || "+91 9999999999",
+            phone_number: booking.phone || "Not provided",
             date: booking.date,
             time: booking.time,
             guests: booking.guests
           })
         });
+        // With no-cors we can't verify the server accepted it, so this
+        // message is "request sent", not a hard confirmation.
+        alertBox.textContent = "🎉 Booking request sent to your Google Sheet!";
+        alertBox.className = "p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold";
+        alertBox.classList.remove('hidden');
       } catch (e) {
         console.error("Sheet Sync Error:", e);
+        alertBox.textContent = "⚠️ Couldn't reach the booking sheet. Please note the details manually.";
+        alertBox.className = "p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-semibold";
+        alertBox.classList.remove('hidden');
       }
     }
   </script>
